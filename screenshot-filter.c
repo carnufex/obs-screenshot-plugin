@@ -85,56 +85,69 @@ struct screenshot_filter_data {
 static DWORD CALLBACK write_images_thread(struct screenshot_filter_data *filter)
 {
 	while (!filter->exit) {
-		WaitForSingleObject(filter->mutex, INFINITE);
-		// copy all props & data inside the mutex, then do the processing/write/put outside of the mutex
+		if (!filter->ready) {
+			WaitForSingleObject(filter->mutex, INFINITE);
+			ReleaseMutex(filter->mutex);
+			Sleep(1); // prevent busy spinning
+			continue;
+		}
+
 		uint8_t *data = NULL;
-		char *destination = filter->destination;
-		int destination_type = filter->destination_type;
-		uint32_t width = filter->width;
-		uint32_t height = filter->height;
-		uint32_t linesize = filter->linesize;
-		bool raw = filter->raw;
-		if (filter->ready) {
+		char *destination = NULL;
+		int destination_type = 0;
+		uint32_t width = 0, height = 0, linesize = 0;
+		bool raw = false;
+
+		// safely copy shared state under mutex
+		WaitForSingleObject(filter->mutex, INFINITE);
+		destination = filter->destination;
+		destination_type = filter->destination_type;
+		width = filter->width;
+		height = filter->height;
+		linesize = filter->linesize;
+		raw = filter->raw;
+
+		if (filter->ready && filter->data) {
 			data = bzalloc(linesize * height);
 			memcpy(data, filter->data, linesize * height);
 			filter->ready = false;
 		}
 		ReleaseMutex(filter->mutex);
 
+		// write the frame
 		if (data && width > 10 && height > 10) {
 			if (destination_type == SETTING_DESTINATION_SHMEM_ID) {
 				if (filter->shmem) {
-					uint32_t *buf =
-						(uint32_t *)MapViewOfFile(
-							filter->shmem,
-							FILE_MAP_ALL_ACCESS, 0,
-							0, filter->shmem_size);
+					uint32_t *buf = (uint32_t *)MapViewOfFile(
+						filter->shmem,
+						FILE_MAP_ALL_ACCESS,
+						0, 0,
+						filter->shmem_size);
 
 					if (buf) {
 						buf[0] = width;
 						buf[1] = height;
 						buf[2] = linesize;
 						buf[3] = filter->index;
-						memcpy(&buf[4], data,
-						       linesize * height);
+						memcpy(&buf[4], data, linesize * height);
+						UnmapViewOfFile(buf);
 					}
-
-					UnmapViewOfFile(buf);
 				}
-			} else if (raw)
+			} else if (raw) {
 				write_data(destination, data, linesize * height,
-					   "image/rgba32", width, height,
-					   destination_type);
-			else
-				write_image(destination, data, linesize, width,
-					    height, destination_type);
+				           "image/rgba32", width, height,
+				           destination_type);
+			} else {
+				write_image(destination, data, linesize,
+				            width, height, destination_type);
+			}
+
 			filter->index += 1;
 			bfree(data);
 		}
-		Sleep(200);
 	}
-	filter->exited = true;
 
+	filter->exited = true;
 	return 0;
 }
 
