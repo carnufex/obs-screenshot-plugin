@@ -80,6 +80,7 @@ struct screenshot_filter_data {
 	HANDLE mutex;
 	bool exit;
 	bool exited;
+	bool always_capture;
 };
 
 static DWORD CALLBACK write_images_thread(struct screenshot_filter_data *filter)
@@ -198,9 +199,12 @@ static bool is_timer_enable_modified(obs_properties_t *props,
 
 	int type = (int)obs_data_get_int(settings, SETTING_DESTINATION_TYPE);
 	bool is_timer_enable = obs_data_get_bool(settings, SETTING_TIMER);
+	bool always = obs_data_get_bool(settings, "always_capture");
+
 	obs_property_set_visible(obs_properties_get(props, SETTING_INTERVAL),
-				 is_timer_enable ||
-					 type == SETTING_DESTINATION_SHMEM_ID);
+				 (is_timer_enable ||
+				  type == SETTING_DESTINATION_SHMEM_ID) &&
+					 !always);
 
 	return true;
 }
@@ -244,6 +248,8 @@ static obs_properties_t *screenshot_filter_properties(void *data)
 
 	obs_properties_add_bool(props, SETTING_RAW, "Raw image");
 
+	obs_properties_add_bool(props, "always_capture", "Capture every frame");
+
 	return props;
 }
 
@@ -270,6 +276,12 @@ static void screenshot_filter_update(void *data, obs_data_t *settings)
 	const char *folder_path =
 		obs_data_get_string(settings, SETTING_DESTINATION_FOLDER);
 	bool is_timer_enabled = obs_data_get_bool(settings, SETTING_TIMER);
+
+	filter->always_capture = obs_data_get_bool(settings, "always_capture");
+
+	if (filter->always_capture) {
+		filter->timer = false;
+	}
 
 	WaitForSingleObject(filter->mutex, INFINITE);
 
@@ -496,7 +508,9 @@ static void screenshot_filter_tick(void *data, float t)
 		}
 	}
 
-	if (filter->timer) {
+	if (filter->always_capture) {
+		filter->capture = true;
+	} else if (filter->timer) {
 		filter->since_last += t;
 		if (filter->since_last > filter->interval - 0.05) {
 			filter->capture = true;
