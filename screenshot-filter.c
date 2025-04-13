@@ -47,6 +47,7 @@ static bool put_data(char *url, uint8_t *buf, size_t len, char *content_type,
 #define SETTING_INTERVAL "interval"
 #define SETTING_RAW "raw"
 
+
 struct screenshot_filter_data {
 	obs_source_t *context;
 
